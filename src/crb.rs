@@ -1,8 +1,9 @@
-use core::{cell::OnceCell, hint::spin_loop, ptr};
+use core::{cell::OnceCell, hint::spin_loop, ptr::{self, read}};
 
 use spin::Mutex;
 
 use bitfield::bitfield;
+
 
 /*
  * Command Header Fields:
@@ -200,6 +201,7 @@ impl Default for TpmIf {
     }
 }
 
+
 /* Const Definition */
 const TPM_NR_LOCALITIES:u32      = 5;
 const TPM_LOCALITY_BASE:u64      = 0xfed40000;
@@ -238,18 +240,51 @@ const TPM_CRB_CTRL_RSP_ADDR:u32   =   0x68;
 const TPM_CRB_DATA_BUFFER:u32     =   0x80;
 const TPMCRBBUF_LEN:u32           =  0xF80;     //3968 Bytes
 
+static TPM_IF_INSTANCE: OnceCell<Mutex<TpmIf>> = OnceCell::new();
+pub fn get_tpm_if() -> &'static Mutex<TpmIf> {
+    TPM_IF_INSTANCE.get_or_init(|| {
+        Mutex::new(TpmIf::default())
+    })
+}
+
+
+bitfield! {
+    struct TpmRegLocState(u32);
+    pub tpm_establishment, _: 0,0;
+    pub loc_assigned, _: 1,1;
+    pub active_locality, _:4,2;
+    pub reserved, _:7,5;
+    pub tpm_reg_valid_sts, _:8,8; /* RO, 1=other bits are valid */
+    pub reserved1, _:16,9;
+    pub reserved2, _:31,17;
+}
+
+impl FromBytes for TpmRegLocState {
+    type Bytes = [u8;4];
+    fn from_le_bytes(bytes:Self::Bytes) ->Self {
+        let raw_value = u32::from_le_bytes(bytes);
+        TpmRegLocState(raw_value)
+    }
+}
+
+
 trait ToBytes {
     type Bytes;
     fn to_le_bytes(&self) -> Self::Bytes;
 }
 
-bitfield! {
-    struct Request(u32);
-    pub _, set_cmd_ready: 0,0;
-    pub _, set_go_idle: 1,1;  
+trait FromBytes {
+    type Bytes;
+    fn from_le_bytes(bytes: Self::Bytes) -> Self;
 }
 
-impl ToBytes for Request {
+bitfield! {
+    struct TpmRegCtrlRequest(u32);
+    pub cmd_ready, set_cmd_ready: 0,0;
+    pub go_idle, set_go_idle: 1,1;  
+}
+
+impl ToBytes for TpmRegCtrlRequest {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -257,14 +292,22 @@ impl ToBytes for Request {
     }
 }
 
+impl FromBytes for TpmRegCtrlRequest {
+    type Bytes = [u8;4];
+
+    fn from_le_bytes(bytes: Self::Bytes) -> Self {
+        todo!()
+    }
+}
+
 bitfield! {
-    pub struct Status(u32);
+    pub struct TpmRegCtrlStatus(u32);
     pub error, _: 0, 0;
     pub tpm_idle, _: 1, 1;
 
 }
 
-impl ToBytes for Status {
+impl ToBytes for TpmRegCtrlStatus {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -272,13 +315,21 @@ impl ToBytes for Status {
     }
 }
 
+impl FromBytes for TpmRegCtrlStatus {
+    type Bytes = [u8;4];
+
+    fn from_le_bytes(bytes: Self::Bytes) -> Self {
+        todo!()
+    }
+}
+
 
 bitfield! {
-    pub struct Cancel(u32);
+    pub struct TpmRegCtrlCancel(u32);
     pub cancel, set_cancel: 0,0;
 }
 
-impl ToBytes for Cancel {
+impl ToBytes for TpmRegCtrlCancel {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -287,11 +338,11 @@ impl ToBytes for Cancel {
 }
 
 bitfield! {
-    pub struct Start(u32);
+    pub struct TpmRegCtrlStart(u32);
     pub start, set_start: 0,0;
 }
 
-impl ToBytes for Start {
+impl ToBytes for TpmRegCtrlStart {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -299,9 +350,9 @@ impl ToBytes for Start {
     }
 }
 
-pub struct CmdSize(u32);
+pub struct TpmRegCtrlCmdSize(u32);
 
-impl ToBytes for CmdSize {
+impl ToBytes for TpmRegCtrlCmdSize {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -309,9 +360,9 @@ impl ToBytes for CmdSize {
     }
 }
 
-pub struct CmdAddr(u64);
+pub struct TpmRegCtrlCmdAddr(u64);
 
-impl ToBytes for CmdAddr {
+impl ToBytes for TpmRegCtrlCmdAddr {
     type Bytes = [u8;8];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -319,9 +370,9 @@ impl ToBytes for CmdAddr {
     }
 }
 
-pub struct RspSize(u32);
+pub struct TpmRegCtrlRspSize(u32);
 
-impl ToBytes for RspSize {
+impl ToBytes for TpmRegCtrlRspSize {
     type Bytes = [u8;4];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -329,9 +380,9 @@ impl ToBytes for RspSize {
     }
 }
 
-pub struct RspAddr(u64);
+pub struct TpmRegCtrlRspAddr(u64);
 
-impl ToBytes for RspAddr {
+impl ToBytes for TpmRegCtrlRspAddr {
     type Bytes = [u8;8];
 
     fn to_le_bytes(&self) -> Self::Bytes {
@@ -339,18 +390,25 @@ impl ToBytes for RspAddr {
     }
 }
 
+impl FromBytes for TpmRegCtrlRspAddr {
+    type Bytes = [u8;8];
+
+    fn from_le_bytes(bytes: Self::Bytes) -> Self {
+        todo!()
+    }
+}
 
 #[repr(C,packed)]
 pub struct CrbControlArea {
-    request: Request,
-    status: Status,
-    cancel: Cancel,
-    start: Start,
+    request: TpmRegCtrlRequest,
+    status: TpmRegCtrlStatus,
+    cancel: TpmRegCtrlCancel,
+    start: TpmRegCtrlStart,
     _reserved: u64,
-    cmdsize: CmdSize,
-    cmdaddr: CmdAddr,
-    rspsize: RspSize,
-    rspaddr: RspAddr,
+    cmdsize: TpmRegCtrlCmdSize,
+    cmdaddr: TpmRegCtrlCmdAddr,
+    rspsize: TpmRegCtrlRspSize,
+    rspaddr: TpmRegCtrlRspAddr,
 }
 
 enum Locality {
@@ -366,31 +424,117 @@ enum TpmCrbError {
     Timeout,
 }
 
-static TPM_IF_INSTANCE: OnceCell<Mutex<TpmIf>> = OnceCell::new();
-pub fn get_tpm_if() -> &'static Mutex<TpmIf> {
-    TPM_IF_INSTANCE.get_or_init(|| {
-        Mutex::new(TpmIf::default())
-    })
+fn tpm_validate_locality_crb(locality:u32) -> bool {
+    
+    let i = TPM_VALIDATE_LOCALITY_TIME_OUT;
+    let reg_loc_state_bytes = [0u8;4];
+    while i > 0 {
+        read_tpm_reg(locality, TPM_REG_LOC_STATE, &mut reg_loc_state_bytes);
+        let reg_loc_state = TpmRegLocState::from_le_bytes(reg_loc_state_bytes);
+        if reg_loc_state.tpm_reg_valid_sts() == 1
+            && reg_loc_state.loc_assigned() == 1
+            && reg_loc_state.active_locality() == locality 
+        {
+            printk("TPM: reg_loc_state._raw[0]"); //?
+            return true;
+        }
+        spin_loop();
+        i -= 1;
+    }
+
+    printk(TBOOT_ERR "TPM: tpm_validate_locality_crb timeout\n");
+    return false;
 }
 
+fn tpm_send_cmd_ready_status_crb(locality:u32) -> bool {
+    let mut raw_bytes = [0u8;4]; //TODO
+    read_tpm_reg(locality, TPM_CRB_CTRL_STS, &mut raw_bytes);
+    let status = TpmRegCtrlStatus::from_le_bytes(raw_bytes);
+
+    if status.tpm_idle() == 1 {
+        let request:TpmRegCtrlRequest = TpmRegCtrlRequest::new();//tb_memset?
+        request.set_cmd_ready(1);
+        write_tpm_reg(locality, TPM_CRB_CTRL_REQ, request.to_le_bytes());
+        return true;
+    }
+
+    let request:TpmRegCtrlRequest = TpmRegCtrlRequest::new();//tb_memset?
+    request.set_go_idle(1);
+    write_tpm_reg(locality, TPM_CRB_CTRL_REQ, request.to_le_bytes());
+
+    let i = 0;
+    while i <= get_tpm_time_out(TpmTimeoutType::DataAvailTimeout) {
+        read_tpm_reg(locality, TPM_CRB_CTRL_REQ, &mut raw_bytes);
+        if request.go_idle() == 0 {
+            break;
+        } else {
+            spin_loop();
+            read_tpm_reg(locality, TPM_CRB_CTRL_REQ, &mut raw_bytes);// TODO:又读一遍？
+        }
+        i += 1;
+    }
+    if i > get_tpm_time_out(TpmTimeoutType::DataAvailTimeout) {
+        printk(TBOOT_ERR "TPM: reg_ctrl_request.goidle timeout!\n");
+        return false;
+    }
+
+    read_tpm_reg(locality, TPM_CRB_CTRL_STS, &mut raw_bytes);
+    let status = TpmRegCtrlStatus::from_le_bytes(raw_bytes);
+
+    let request:TpmRegCtrlRequest = TpmRegCtrlRequest::new();//tb_memset?
+    request.set_cmd_ready(1);
+    write_tpm_reg(locality, TPM_CRB_CTRL_REQ, request.to_le_bytes());
+
+    read_tpm_reg(locality, TPM_CRB_CTRL_STS, &mut raw_bytes);
+    let status = TpmRegCtrlStatus::from_le_bytes(raw_bytes);
+    true
+}
+
+fn tpm_check_cmd_ready_status_crb(locality:u32) -> bool {
+    let raw_bytes = [0u8;4];
+    read_tpm_reg(locality, TPM_CRB_CTRL_REQ, &mut raw_bytes);
+    let request = TpmRegCtrlRequest::from_le_bytes(raw_bytes);
+
+    return request.cmd_ready() == 0;
+}
+
+fn tpm_wait_cmd_ready_crb(locality:u32) -> bool {
+
+    tpm_send_cmd_ready_status_crb(locality);
+    let mut i = 0;
+    while i <= get_tpm_time_out(TpmTimeoutType::CmdReadyTimeout) {
+        if tpm_check_cmd_ready_status_crb(locality) {
+            break;
+        } else {
+            spin_loop();
+        }
+        i += 1;
+    }
+
+    if i > get_tpm_time_out(TpmTimeoutType::CmdReadyTimeout) {
+        printk(TBOOT_INFO "TPM: tpm timeout for command_ready\n");
+        return false;
+    }
+    true
+}
 
 pub fn tpm_submit_cmd_crb(locality:u32, in_value: &[u8], in_size:u32, out_value:&mut [u8], out_size:u32) -> Result<(), TpmCrbError> {
 
     //locality range check
     if locality >= TPM_NR_LOCALITIES {
-        print();
+        printk();
         return Err(TpmCrbError::InvalidLocality)
     }
 
     // in out data check
     if in_value.len() < CMD_HEAD_SIZE || out_value.len() < RSP_HEAD_SIZE {
-        print();
+        printk();
         return Err(TpmCrbError::InvalidBufferSize);
     }
 
     // locality validation check
     if !tpm_validate_locality_crb(locality) {
-        print();
+        printk();
         return Err(TpmCrbError::LocalityNotOpen);
     }
 
@@ -401,10 +545,10 @@ pub fn tpm_submit_cmd_crb(locality:u32, in_value: &[u8], in_size:u32, out_value:
 
 
     // write command to TPM CRB buffer
-    let cmdaddr = CmdAddr(TPM_LOCALITY_BASE_N(locality) | TPM_CRB_DATA_BUFFER as u64);
-    let rspaddr = RspAddr(TPM_LOCALITY_BASE_N(locality) | TPM_CRB_DATA_BUFFER as u64);
-    let cmdsize = CmdSize(TPMCRBBUF_LEN);
-    let rspsize = RspSize(TPMCRBBUF_LEN);
+    let cmdaddr = TpmRegCtrlCmdAddr(TPM_LOCALITY_BASE_N(locality) | TPM_CRB_DATA_BUFFER as u64);
+    let rspaddr = TpmRegCtrlRspAddr(TPM_LOCALITY_BASE_N(locality) | TPM_CRB_DATA_BUFFER as u64);
+    let cmdsize = TpmRegCtrlCmdSize(TPMCRBBUF_LEN);
+    let rspsize = TpmRegCtrlRspSize(TPMCRBBUF_LEN);
 
     write_tpm_reg(locality, TPM_CRB_CTRL_CMD_ADDR, &cmdaddr.to_le_bytes());
     write_tpm_reg(locality, TPM_CRB_CTRL_CMD_SIZE, &cmdsize.to_le_bytes());
@@ -415,7 +559,7 @@ pub fn tpm_submit_cmd_crb(locality:u32, in_value: &[u8], in_size:u32, out_value:
     write_tpm_reg(locality, TPM_CRB_DATA_BUFFER, in_value);
 
     // set start to execute the command
-    let start = Start(0);
+    let start = TpmRegCtrlStart(0);
     start.set_start(1);
     write_tpm_reg(locality, TPM_CRB_CTRL_START, &start.to_le_bytes());
     // print tpm Start reg information
